@@ -5,7 +5,9 @@
         "device": "*"
     },
     "files": [
+        "main.blocks",
         "main.ts",
+        "tatees.ts",
         "README.md"
     ],
     "testFiles": [
@@ -36,5 +38,5 @@
     "supportedTargets": [
         "arcade"
     ],
-    "preferredEditor": "tsprj"
+    "preferredEditor": "blocksprj"
 }
