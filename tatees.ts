@@ -3040,9 +3040,13 @@ function buildDunes () {
     heights = Buffer.create(MAP * MAP)
     sunLight = Buffer.create(MAP * MAP)
     tracks = Buffer.create(MAP * MAP)
+    tint = Buffer.create(MAP * MAP)
     for (let y = 0; y < MAP; y++) {
         for (let x = 0; x < MAP; x++) {
             heights[y * MAP + x] = Math.max(0, Math.min(255, Math.round(duneHeight(x, y))))
+            let a = x * 2 * Math.PI / MAP
+            let b = y * 2 * Math.PI / MAP
+            tint[y * MAP + x] = Math.round(128 + 60 * Math.sin(a * 2 + 0.7) * Math.cos(b * 3 - 0.4) + 30 * Math.sin(a * 5 + b * 4))
         }
     }
     // ضوء الشمس على كل خانة | sunlight on every cell
@@ -3060,7 +3064,7 @@ function buildDunes () {
             let hz = cellH(x, y)
             for (let k = 2; k <= 40; k += 2) {
                 if (cellH(x - k, y - Math.floor(k * 0.45)) > hz + k * CELL * 0.42) {
-                    v = Math.min(v, 0.12)
+                    v = Math.min(v, SHADOW_LEVEL)
                     break
                 }
             }
@@ -3163,6 +3167,7 @@ let message = ""
 let messageUntil = 0
 let campX = 0
 let campY = 0
+let SHADOW_LEVEL = 0.25
 let rolloverHandlers: (() => void)[] = []
 let flagHandlers: (() => void)[] = []
 
@@ -3615,6 +3620,35 @@ function collectThings () {
 
 let BAYER = [0.125, 0.625, 0.875, 0.375]
 let SHADES = [6, 5, 4, 3]
+// طريقة رسم الرمل | how the sand is drawn
+let RENDER_STYLE = 2
+let FOG_START = 850
+let FOG_AMOUNT = 0.6
+let CONTRAST = 1.5
+let BRIGHTEN = 0.02
+// تدرج الرمل من الظل للضوء (6 ألوان) | the sand ramp from shadow to light (6 tones)
+let RAMP = [6, 5, 4, 12, 3, 9]
+// نمط التنقيط 4×4 | 4x4 dither pattern
+let BAYER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5]
+let prevV: number[] = []
+for (let i = 0; i < 160; i++) {
+    prevV.push(0.5)
+}
+// تنوع ألوان الرمل في المنطقة | sand colour variation across the area
+let tint: Buffer = null
+function lightAt (wx: number, wy: number): number {
+    let fx = wx / CELL
+    let fy = wy / CELL
+    let x0 = Math.floor(fx)
+    let y0 = Math.floor(fy)
+    let tx = fx - x0
+    let ty = fy - y0
+    let a = sunLight[((y0 % MAP + MAP) % MAP) * MAP + (x0 % MAP + MAP) % MAP]
+    let b = sunLight[((y0 % MAP + MAP) % MAP) * MAP + ((x0 + 1) % MAP + MAP) % MAP]
+    let c = sunLight[(((y0 + 1) % MAP + MAP) % MAP) * MAP + (x0 % MAP + MAP) % MAP]
+    let d = sunLight[(((y0 + 1) % MAP + MAP) % MAP) * MAP + ((x0 + 1) % MAP + MAP) % MAP]
+    return ((a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty) / 255
+}
 function drawTerrain (target: Image) {
     // السماء | the sky
     target.fillRect(0, 0, 160, 120, 7)
@@ -3717,6 +3751,116 @@ function drawTerrain (target: Image) {
             ly += stepY
         }
         // نسجّل الرمل اللي قدام كل شي | remember the sand in front of each thing
+        for (let t = 0; t < thingX.length; t++) {
+            if (thingDepth[t] > z - dz && thingDepth[t] <= z && thingCol[t] >= 0 && thingCol[t] < 160) {
+                thingOcc[t] = ybuf[thingCol[t]]
+            }
+        }
+        z += dz
+        dz = dz * 1.045
+    }
+}
+
+// رسم ناعم: كل بكسل لونه متدرج بين القريب والبعيد | smooth drawing: every pixel blends between near and far
+function drawTerrainSmooth (target: Image, edges: boolean) {
+    target.fillRect(0, 0, 160, 120, 7)
+    target.fillRect(0, 0, 160, 10, 8)
+    for (let y = 10; y < 26; y++) {
+        for (let x = 0; x < 160; x++) {
+            if (BAYER4[(y % 4) * 4 + x % 4] < (26 - y) * 1) {
+                target.setPixel(x, y, 8)
+            }
+        }
+    }
+    let sunY = 14
+    if (timeOfDay == DayTime.Sunset) {
+        sunY = Math.floor(HORIZON) - 4
+    }
+    target.fillCircle(130, sunY, 9, 9)
+    target.fillCircle(130, sunY, 6, 13)
+    for (let i = 0; i < 160; i++) {
+        ybuf[i] = 120
+        edgeZ[i] = 0
+        prevV[i] = -1
+    }
+    collectThings()
+    let fwdX = Math.cos(camHeading)
+    let fwdY = Math.sin(camHeading)
+    let rightX = 0 - fwdY
+    let rightY = fwdX
+    let z = 4
+    let dz = 2
+    while (z < 1400) {
+        let lx = camX + (fwdX - rightX * FOV) * z
+        let ly = camY + (fwdY - rightY * FOV) * z
+        let stepX = rightX * FOV * 2 * z / 160
+        let stepY = rightY * FOV * 2 * z / 160
+        let inv = SCALE / z
+        let near = z < 200
+        // الغبار يزيد مع البعد | haze grows with distance
+        let fog = Math.max(0, Math.min(1, (z - FOG_START) / (1400 - FOG_START))) * FOG_AMOUNT
+        for (let i = 0; i < 160; i++) {
+            let cx = (Math.floor(lx / CELL) % MAP + MAP) % MAP
+            let cy = (Math.floor(ly / CELL) % MAP + MAP) % MAP
+            let idx = cy * MAP + cx
+            let h = heights[idx]
+            let v = sunLight[idx] / 255
+            if (near) {
+                h = groundAt(lx, ly)
+                v = lightAt(lx, ly)
+            }
+            if (tracks[idx] == 1 && z < 450) {
+                v = v * 0.8
+            }
+            // تنوع خفيف في لون الرمل | gentle sand colour variation
+            v = v + (tint[idx] - 128) / 900
+            // نزيد الفرق بين الضوء والظل | boost the difference between light and shadow
+            v = (v - 0.5) * CONTRAST + 0.5 + BRIGHTEN
+            let sy = Math.floor((camZ - h) * inv + HORIZON)
+            if (sy < ybuf[i]) {
+                let bottom = ybuf[i]
+                let vBottom = prevV[i]
+                if (vBottom < 0) {
+                    vBottom = v
+                }
+                if (edges && bottom < 120 && z > edgeZ[i] * 1.35 + 20) {
+                    // حافة طعس قدام طعس: نخلي القمة تلمع | a dune edge in front of another: the crest shines
+                    vBottom = Math.min(1.05, vBottom + 0.35)
+                }
+                // حساب سريع بالأرقام الصحيحة | fast integer maths
+                let span = Math.max(1, bottom - sy)
+                let L = Math.floor(Math.max(0, Math.min(1.2, v)) * 1280)
+                let L1 = Math.floor(Math.max(0, Math.min(1.2, vBottom)) * 1280)
+                let dL = Math.floor((L1 - L) / span)
+                let y0 = sy
+                if (y0 < 0) {
+                    L += dL * (0 - y0)
+                    y0 = 0
+                }
+                let fogI = Math.floor(fog * 16)
+                let col = i & 3
+                for (let y = y0; y < bottom; y++) {
+                    let th = BAYER4[((y & 3) << 2) | col]
+                    let c = 9
+                    if (th >= fogI) {
+                        let lv = ((L >> 4) + th) >> 4
+                        if (lv > 5) {
+                            lv = 5
+                        } else if (lv < 0) {
+                            lv = 0
+                        }
+                        c = RAMP[lv]
+                    }
+                    target.setPixel(i, y, c)
+                    L += dL
+                }
+                ybuf[i] = sy
+                edgeZ[i] = z
+            }
+            prevV[i] = v
+            lx += stepX
+            ly += stepY
+        }
         for (let t = 0; t < thingX.length; t++) {
             if (thingDepth[t] > z - dz && thingDepth[t] <= z && thingCol[t] >= 0 && thingCol[t] < 160) {
                 thingOcc[t] = ybuf[thingCol[t]]
@@ -3923,7 +4067,7 @@ function drawParticles (target: Image) {
 function zoneColor (angle: number): number {
     let a = Math.abs(angle)
     if (a < SAFE_TILT) {
-        return 12
+        return 1
     } else if (a < DANGER_TILT) {
         return 13
     }
@@ -4062,10 +4206,10 @@ function checkFlags () {
 //  البداية | Start
 // =====================================================
 function setDayPalette () {
-    image.setPalette(hex`000000ffffff8a1538ebc88ad9a55cb47e3e6b4a2b9fd8f04f9dd4f2e8cf9c94885e58505e8c31ffd24ae0402f1a1410`)
+    image.setPalette(hex`000000ffffff8a1538f0c47ed08a47a864346e3f2a9fd8f04f9dd4f8e2b89c94885e5850e3a961ffd24ae0402f1a1410`)
 }
 function setSunsetPalette () {
-    image.setPalette(hex`000000ffffff8a1538f2b27ad9824ea8573a5a2e2ef4946a5b3e7af6c9a89c8c885e50606e7a3affd45ee0402f1a1218`)
+    image.setPalette(hex`000000ffffff8a1538f2b27ad97e4ba8573a6e3530f4946a5b3e7afad3b09c8c885e5060e89a60ffd45ee0402f1a1218`)
 }
 function startGame () {
     if (timeOfDay == DayTime.Sunset) {
@@ -4107,7 +4251,11 @@ function startGame () {
     camHeading = heading
     let lastTime = game.runtime()
     scene.createRenderable(0, function (target: Image, camera: scene.Camera) {
-        drawTerrain(target)
+        if (RENDER_STYLE == 0) {
+            drawTerrain(target)
+        } else {
+            drawTerrainSmooth(target, RENDER_STYLE == 2)
+        }
         drawThings(target)
         drawParticles(target)
         drawCar(target)
