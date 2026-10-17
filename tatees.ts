@@ -23,8 +23,10 @@ let TURN_RATE = 1.6
 let SAND_GRIP = 0.7
 let SAFE_TILT = 20
 let DANGER_TILT = 30
-let ROLL_LIMIT = 38
 let LAND_LIMIT = 34
+// تنقلب بس إذا طرت أسرع من هذا (290 = حوالي 105 كم/س) | you only crash when flying faster than this
+let CRASH_SPEED = 290
+let takeoffSpeed = 0
 let FLAG_COUNT = 12
 let AI_COUNT = 3
 let CAMEL_COUNT = 6
@@ -3054,6 +3056,14 @@ function buildDunes () {
             let len = Math.sqrt(nx * nx + ny * ny + 1)
             let d = (nx * sx + ny * sy + sz) / len
             let v = Math.max(0, Math.min(1, (d - 0.3) / 0.7))
+            // ظل الطعس اللي قبله من الشمس الواطية | shadow cast by the dune in front of the low sun
+            let hz = cellH(x, y)
+            for (let k = 2; k <= 40; k += 2) {
+                if (cellH(x - k, y - Math.floor(k * 0.45)) > hz + k * CELL * 0.42) {
+                    v = Math.min(v, 0.12)
+                    break
+                }
+            }
             // خط القمة | the crest line
             let here = cellH(x, y)
             if (here > cellH(x - 2, y) + 1 && here > cellH(x + 2, y) + 1 && here > 100) {
@@ -3298,6 +3308,7 @@ function updateCar (dt: number) {
         if (vz > groundVz + 70 && speed > 120) {
             airborne = true
             airPitch = pitch
+            takeoffSpeed = Math.abs(speed)
             music.play(music.melodyPlayable(music.jumpUp), music.PlaybackMode.InBackground)
         } else {
             // النوابض تمتص المطبات | the suspension soaks up bumps
@@ -3319,8 +3330,9 @@ function updateCar (dt: number) {
             carZ = newGround
             airborne = false
             bodyVY += vz * 0.25
-            if (Math.abs(airPitch - groundPitch) > LAND_LIMIT) {
-                rollOver("BAD LANDING!")
+            // تنقلب بس إذا طرت بسرعة كبيرة جداً ونزلت غلط | only crash when you flew very fast and landed badly
+            if (takeoffSpeed > CRASH_SPEED) {
+                rollOver("TOO FAST! SLOW DOWN")
             } else {
                 velX = velX * 0.88
                 velY = velY * 0.88
@@ -3359,10 +3371,6 @@ function updateCar (dt: number) {
             markTrack(blX, blY)
             markTrack(brX, brY)
         }
-    }
-    // الانقلاب | rolling over
-    if (!(tumbling) && !(airborne) && Math.abs(totalTilt()) > ROLL_LIMIT) {
-        rollOver("ROLLED OVER!")
     }
     // اهتزاز في النزلات السريعة | shaking on fast descents
     if (!(airborne) && pitch < -12 && speed > 150) {
@@ -3547,8 +3555,12 @@ function updateWorld (dt: number) {
 //  الرسم | Drawing
 // =====================================================
 let ybuf: number[] = []
+let edgeZ: number[] = []
+let edgeC: number[] = []
 for (let i = 0; i < 160; i++) {
     ybuf.push(120)
+    edgeZ.push(0)
+    edgeC.push(4)
 }
 // الأشياء اللي نرسمها في العالم | things we draw in the world
 let thingX: number[] = []
@@ -3620,6 +3632,8 @@ function drawTerrain (target: Image) {
     target.fillCircle(130, sunY, 6, 13)
     for (let i = 0; i < 160; i++) {
         ybuf[i] = 120
+        edgeZ[i] = 0
+        edgeC[i] = 4
     }
     collectThings()
     let fwdX = Math.cos(camHeading)
@@ -3674,15 +3688,30 @@ function drawTerrain (target: Image) {
                         c += 1
                     }
                 }
+                // البعيد يفتح لونه مع الغبار | far away gets lighter in the haze
                 if (z > 1050) {
                     c = 9
                 } else if (far && (c == 5 || c == 6)) {
                     c = c - 1
                 } else if (far && c == 4) {
                     c = 3
+                } else if (z > 650 && c == 6) {
+                    c = 5
+                }
+                // خط على حافة الطعس اللي قدام | an outline on the edge of the dune in front
+                if (ybuf[i] < 120 && z > edgeZ[i] * 1.35 + 20) {
+                    let edge = 6
+                    if (edgeC[i] == 3 || edgeC[i] == 9) {
+                        edge = 1
+                    } else if (edgeC[i] == 4) {
+                        edge = 9
+                    }
+                    target.setPixel(i, ybuf[i], edge)
                 }
                 target.fillRect(i, sy, 1, ybuf[i] - sy, c)
                 ybuf[i] = sy
+                edgeZ[i] = z
+                edgeC[i] = c
             }
             lx += stepX
             ly += stepY
@@ -3935,17 +3964,6 @@ function drawGauges (target: Image) {
     drawDial(target, 143, 102, 0 - pitch, true)
     target.print("SIDE", 7, 82, 1, image.font5)
     target.print("SLOPE", 130, 82, 1, image.font5)
-    if ((Math.abs(tilt) > DANGER_TILT || Math.abs(pitch) > DANGER_TILT) && game.runtime() > tumbleUntil) {
-        if (Math.floor(game.runtime() / 150) % 2 == 0) {
-            target.drawRect(0, 0, 160, 120, 14)
-            target.drawRect(1, 1, 158, 118, 14)
-            target.print("DANGER!", 59, 24, 14)
-        }
-        if (game.runtime() - lastBeep > 300) {
-            lastBeep = game.runtime()
-            music.play(music.tonePlayable(988, music.beat(BeatFraction.Sixteenth)), music.PlaybackMode.InBackground)
-        }
-    }
 }
 function drawHud (target: Image) {
     target.fillRect(0, 0, 160, 10, 15)
@@ -4031,7 +4049,7 @@ function checkFlags () {
             effects.confetti.startScreenEffect()
             control.runInParallel(function () {
                 pause(3000)
-                game.splash("TIME: " + finalTime + "s", "Rollovers: " + rollovers)
+                game.splash("TIME: " + finalTime + "s", "Crashes: " + rollovers)
                 game.gameOver(true)
             })
         } else {
@@ -4108,7 +4126,7 @@ function startGame () {
         engineSound()
     })
     game.splash("TATEES", "Dune bashing!")
-    game.showLongText("A = GAS\\nB = BRAKE/BACK\\nLEFT/RIGHT = STEER\\nReach the flags!\\nWatch the tilt dials.", DialogLayout.Center)
+    game.showLongText("A = GAS\\nB = BRAKE/BACK\\nLEFT/RIGHT = STEER\\nReach the flags!\\nSlow down before big jumps!", DialogLayout.Center)
     say("3", 800)
     pause(900)
     say("2", 800)
@@ -4154,15 +4172,13 @@ namespace tatees {
         SAND_GRIP = grip
     }
     /**
-     * زاوية الانقلاب | the angle where the car rolls over
+     * السرعة اللي فوقها تنقلب إذا طرت من قمة (كم/س) | jump speed that makes you crash (km/h)
      */
-    //% block="roll over at $degrees degrees"
-    //% degrees.min=20 degrees.max=60 degrees.defl=38
+    //% block="crash on jumps faster than $kmh km/h"
+    //% kmh.min=60 kmh.max=200 kmh.defl=105
     //% weight=70
-    export function setRolloverAngle (degrees: number) {
-        ROLL_LIMIT = degrees
-        DANGER_TILT = degrees - 8
-        SAFE_TILT = degrees - 18
+    export function setCrashSpeed (kmh: number) {
+        CRASH_SPEED = kmh / 0.36
     }
     /**
      * كم علم | how many flags
@@ -4202,7 +4218,7 @@ namespace tatees {
     /**
      * لما تنقلب السيارة | when the car rolls over
      */
-    //% block="on roll over"
+    //% block="on crash"
     //% weight=20
     export function onRollover (handler: () => void) {
         rolloverHandlers.push(handler)
@@ -4218,7 +4234,7 @@ namespace tatees {
     /**
      * كم مرة انقلبت | how many times you rolled over
      */
-    //% block="rollovers"
+    //% block="crashes"
     //% weight=18
     export function rolloverCount (): number {
         return rollovers
