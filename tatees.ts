@@ -3008,31 +3008,6 @@ let sizesAiGrey: Image[][] = []
 // =====================================================
 //  الطعوس | Dunes
 // =====================================================
-function duneHeight (cx: number, cy: number): number {
-    let a = cx * 2 * Math.PI / MAP
-    let b = cy * 2 * Math.PI / MAP
-    // الطعوس هلالية الشكل | dunes are crescent shaped
-    let shift = 10 * Math.sin(b * 2) + 6 * Math.sin(b * 5 + 1) + 3 * Math.sin(b * 11)
-    let phase = ((cx + shift) % DUNE_SPACING + DUNE_SPACING) % DUNE_SPACING / DUNE_SPACING
-    // الطلعة 68% والسلّة 32% (زاوية السلّة حوالي 32 درجة مثل الطعوس الحقيقية)
-    // windward side 68%, slip face 32% (about 32 degrees, like real dunes)
-    let profile = 0
-    if (phase < 0.68) {
-        profile = phase / 0.68
-    } else {
-        profile = (1 - phase) / 0.32
-    }
-    if (profile < 0.08) {
-        profile = profile * profile / 0.16
-    } else if (profile > 0.92) {
-        profile = 1 - (1 - profile) * (1 - profile) / 0.16
-    }
-    let size = 0.65 + 0.35 * Math.sin(b * 3 + Math.cos(a * 2))
-    let rolling = 8 * (Math.sin(a * 3 + b * 2) + 0.7 * Math.cos(b * 4 - a))
-    // تموجات صغيرة على ظهر الطعس | small ridges on the dune back
-    let ridges = 4 * Math.sin(a * 9 + b * 3) * profile
-    return 40 + DUNE_HEIGHT * size * profile + rolling + ridges
-}
 function cellH (x: number, y: number): number {
     return heights[((y % MAP + MAP) % MAP) * MAP + (x % MAP + MAP) % MAP]
 }
@@ -3040,37 +3015,98 @@ function buildDunes () {
     heights = Buffer.create(MAP * MAP)
     sunLight = Buffer.create(MAP * MAP)
     tracks = Buffer.create(MAP * MAP)
+    tint = Buffer.create(MAP * MAP)
+    // نحسب الجيب والجتا مرة وحدة لكل عمود عشان التحميل يكون سريع
+    // work out sin/cos once per column so loading is fast
+    let sa: number[] = []
+    let ca: number[] = []
+    let sa3: number[] = []
+    let ca3: number[] = []
+    let sa9: number[] = []
+    let ca9: number[] = []
+    let sa5: number[] = []
+    let ca5: number[] = []
+    let ca2: number[] = []
+    let tA: number[] = []
+    for (let x = 0; x < MAP; x++) {
+        let a = x * 2 * Math.PI / MAP
+        sa.push(Math.sin(a))
+        ca.push(Math.cos(a))
+        sa3.push(Math.sin(a * 3))
+        ca3.push(Math.cos(a * 3))
+        sa9.push(Math.sin(a * 9))
+        ca9.push(Math.cos(a * 9))
+        sa5.push(Math.sin(a * 5))
+        ca5.push(Math.cos(a * 5))
+        ca2.push(Math.cos(a * 2))
+        tA.push(Math.sin(a * 2 + 0.7))
+    }
     for (let y = 0; y < MAP; y++) {
+        let b = y * 2 * Math.PI / MAP
+        let shift = 10 * Math.sin(b * 2) + 6 * Math.sin(b * 5 + 1) + 3 * Math.sin(b * 11)
+        let sb2 = Math.sin(b * 2)
+        let cb2 = Math.cos(b * 2)
+        let sb3 = Math.sin(b * 3)
+        let cb3 = Math.cos(b * 3)
+        let sb4 = Math.sin(b * 4)
+        let cb4 = Math.cos(b * 4)
+        let tB = Math.cos(b * 3 - 0.4)
+        let row = y * MAP
         for (let x = 0; x < MAP; x++) {
-            heights[y * MAP + x] = Math.max(0, Math.min(255, Math.round(duneHeight(x, y))))
+            let phase = ((x + shift) % DUNE_SPACING + DUNE_SPACING) % DUNE_SPACING / DUNE_SPACING
+            let profile = 0
+            if (phase < 0.68) {
+                profile = phase / 0.68
+            } else {
+                profile = (1 - phase) / 0.32
+            }
+            if (profile < 0.08) {
+                profile = profile * profile / 0.16
+            } else if (profile > 0.92) {
+                profile = 1 - (1 - profile) * (1 - profile) / 0.16
+            }
+            let size = 0.65 + 0.35 * Math.sin(b * 3 + ca2[x])
+            // sin(3a+2b) + 0.7 cos(4b-a)
+            let rolling = 8 * ((sa3[x] * cb2 + ca3[x] * sb2) + 0.7 * (cb4 * ca[x] + sb4 * sa[x]))
+            // sin(9a+3b)
+            let ridges = 4 * (sa9[x] * cb3 + ca9[x] * sb3) * profile
+            let h = 40 + DUNE_HEIGHT * size * profile + rolling + ridges
+            heights[row + x] = Math.max(0, Math.min(255, Math.round(h)))
+            // sin(5a+4b)
+            tint[row + x] = Math.round(128 + 60 * tA[x] * tB + 30 * (sa5[x] * cb4 + ca5[x] * sb4))
         }
     }
     // ضوء الشمس على كل خانة | sunlight on every cell
     let sx = -0.62
     let sy = -0.28
     let sz = 0.73
+    let M = MAP - 1
+    let lim = SHADOW_LEVEL
     for (let y = 0; y < MAP; y++) {
+        let rowU = ((y - 1) & M) * MAP
+        let rowD = ((y + 1) & M) * MAP
+        let row = y * MAP
         for (let x = 0; x < MAP; x++) {
-            let nx = 0 - (cellH(x + 1, y) - cellH(x - 1, y)) / (2 * CELL)
-            let ny = 0 - (cellH(x, y + 1) - cellH(x, y - 1)) / (2 * CELL)
+            let hz = heights[row + x]
+            let nx = 0 - (heights[row + ((x + 1) & M)] - heights[row + ((x - 1) & M)]) / (2 * CELL)
+            let ny = 0 - (heights[rowD + x] - heights[rowU + x]) / (2 * CELL)
             let len = Math.sqrt(nx * nx + ny * ny + 1)
             let d = (nx * sx + ny * sy + sz) / len
             let v = Math.max(0, Math.min(1, (d - 0.3) / 0.7))
             // ظل الطعس اللي قبله من الشمس الواطية | shadow cast by the dune in front of the low sun
-            let hz = cellH(x, y)
-            for (let k = 2; k <= 40; k += 2) {
-                if (cellH(x - k, y - Math.floor(k * 0.45)) > hz + k * CELL * 0.42) {
-                    v = Math.min(v, 0.12)
-                    break
+            if (v > lim) {
+                for (let k = 2; k <= 40; k += 2) {
+                    if (heights[((y - Math.floor(k * 0.45)) & M) * MAP + ((x - k) & M)] > hz + k * CELL * 0.42) {
+                        v = lim
+                        break
+                    }
                 }
             }
             // خط القمة | the crest line
-            let here = cellH(x, y)
-            if (here > cellH(x - 2, y) + 1 && here > cellH(x + 2, y) + 1 && here > 100) {
-                v = 1
-                sunLight[y * MAP + x] = 255
+            if (hz > heights[row + ((x - 2) & M)] + 1 && hz > heights[row + ((x + 2) & M)] + 1 && hz > 100) {
+                sunLight[row + x] = 255
             } else {
-                sunLight[y * MAP + x] = Math.round(v * 254)
+                sunLight[row + x] = Math.round(v * 254)
             }
         }
     }
@@ -3163,6 +3199,7 @@ let message = ""
 let messageUntil = 0
 let campX = 0
 let campY = 0
+let SHADOW_LEVEL = 0.12
 let rolloverHandlers: (() => void)[] = []
 let flagHandlers: (() => void)[] = []
 
@@ -3615,6 +3652,35 @@ function collectThings () {
 
 let BAYER = [0.125, 0.625, 0.875, 0.375]
 let SHADES = [6, 5, 4, 3]
+// طريقة رسم الرمل | how the sand is drawn
+let RENDER_STYLE = 0
+let FOG_START = 850
+let FOG_AMOUNT = 0.6
+let CONTRAST = 1.5
+let BRIGHTEN = 0.02
+// تدرج الرمل من الظل للضوء (6 ألوان) | the sand ramp from shadow to light (6 tones)
+let RAMP = [6, 5, 4, 12, 3, 9]
+// نمط التنقيط 4×4 | 4x4 dither pattern
+let BAYER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5]
+let prevV: number[] = []
+for (let i = 0; i < 160; i++) {
+    prevV.push(0.5)
+}
+// تنوع ألوان الرمل في المنطقة | sand colour variation across the area
+let tint: Buffer = null
+function lightAt (wx: number, wy: number): number {
+    let fx = wx / CELL
+    let fy = wy / CELL
+    let x0 = Math.floor(fx)
+    let y0 = Math.floor(fy)
+    let tx = fx - x0
+    let ty = fy - y0
+    let a = sunLight[((y0 % MAP + MAP) % MAP) * MAP + (x0 % MAP + MAP) % MAP]
+    let b = sunLight[((y0 % MAP + MAP) % MAP) * MAP + ((x0 + 1) % MAP + MAP) % MAP]
+    let c = sunLight[(((y0 + 1) % MAP + MAP) % MAP) * MAP + (x0 % MAP + MAP) % MAP]
+    let d = sunLight[(((y0 + 1) % MAP + MAP) % MAP) * MAP + ((x0 + 1) % MAP + MAP) % MAP]
+    return ((a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty) / 255
+}
 function drawTerrain (target: Image) {
     // السماء | the sky
     target.fillRect(0, 0, 160, 120, 7)
@@ -3717,6 +3783,116 @@ function drawTerrain (target: Image) {
             ly += stepY
         }
         // نسجّل الرمل اللي قدام كل شي | remember the sand in front of each thing
+        for (let t = 0; t < thingX.length; t++) {
+            if (thingDepth[t] > z - dz && thingDepth[t] <= z && thingCol[t] >= 0 && thingCol[t] < 160) {
+                thingOcc[t] = ybuf[thingCol[t]]
+            }
+        }
+        z += dz
+        dz = dz * 1.045
+    }
+}
+
+// رسم ناعم: كل بكسل لونه متدرج بين القريب والبعيد | smooth drawing: every pixel blends between near and far
+function drawTerrainSmooth (target: Image, edges: boolean) {
+    target.fillRect(0, 0, 160, 120, 7)
+    target.fillRect(0, 0, 160, 10, 8)
+    for (let y = 10; y < 26; y++) {
+        for (let x = 0; x < 160; x++) {
+            if (BAYER4[(y % 4) * 4 + x % 4] < (26 - y) * 1) {
+                target.setPixel(x, y, 8)
+            }
+        }
+    }
+    let sunY = 14
+    if (timeOfDay == DayTime.Sunset) {
+        sunY = Math.floor(HORIZON) - 4
+    }
+    target.fillCircle(130, sunY, 9, 9)
+    target.fillCircle(130, sunY, 6, 13)
+    for (let i = 0; i < 160; i++) {
+        ybuf[i] = 120
+        edgeZ[i] = 0
+        prevV[i] = -1
+    }
+    collectThings()
+    let fwdX = Math.cos(camHeading)
+    let fwdY = Math.sin(camHeading)
+    let rightX = 0 - fwdY
+    let rightY = fwdX
+    let z = 4
+    let dz = 2
+    while (z < 1400) {
+        let lx = camX + (fwdX - rightX * FOV) * z
+        let ly = camY + (fwdY - rightY * FOV) * z
+        let stepX = rightX * FOV * 2 * z / 160
+        let stepY = rightY * FOV * 2 * z / 160
+        let inv = SCALE / z
+        let near = z < 200
+        // الغبار يزيد مع البعد | haze grows with distance
+        let fog = Math.max(0, Math.min(1, (z - FOG_START) / (1400 - FOG_START))) * FOG_AMOUNT
+        for (let i = 0; i < 160; i++) {
+            let cx = (Math.floor(lx / CELL) % MAP + MAP) % MAP
+            let cy = (Math.floor(ly / CELL) % MAP + MAP) % MAP
+            let idx = cy * MAP + cx
+            let h = heights[idx]
+            let v = sunLight[idx] / 255
+            if (near) {
+                h = groundAt(lx, ly)
+                v = lightAt(lx, ly)
+            }
+            if (tracks[idx] == 1 && z < 450) {
+                v = v * 0.8
+            }
+            // تنوع خفيف في لون الرمل | gentle sand colour variation
+            v = v + (tint[idx] - 128) / 900
+            // نزيد الفرق بين الضوء والظل | boost the difference between light and shadow
+            v = (v - 0.5) * CONTRAST + 0.5 + BRIGHTEN
+            let sy = Math.floor((camZ - h) * inv + HORIZON)
+            if (sy < ybuf[i]) {
+                let bottom = ybuf[i]
+                let vBottom = prevV[i]
+                if (vBottom < 0) {
+                    vBottom = v
+                }
+                if (edges && bottom < 120 && z > edgeZ[i] * 1.35 + 20) {
+                    // حافة طعس قدام طعس: نخلي القمة تلمع | a dune edge in front of another: the crest shines
+                    vBottom = Math.min(1.05, vBottom + 0.35)
+                }
+                // حساب سريع بالأرقام الصحيحة | fast integer maths
+                let span = Math.max(1, bottom - sy)
+                let L = Math.floor(Math.max(0, Math.min(1.2, v)) * 1280)
+                let L1 = Math.floor(Math.max(0, Math.min(1.2, vBottom)) * 1280)
+                let dL = Math.floor((L1 - L) / span)
+                let y0 = sy
+                if (y0 < 0) {
+                    L += dL * (0 - y0)
+                    y0 = 0
+                }
+                let fogI = Math.floor(fog * 16)
+                let col = i & 3
+                for (let y = y0; y < bottom; y++) {
+                    let th = BAYER4[((y & 3) << 2) | col]
+                    let c = 9
+                    if (th >= fogI) {
+                        let lv = ((L >> 4) + th) >> 4
+                        if (lv > 5) {
+                            lv = 5
+                        } else if (lv < 0) {
+                            lv = 0
+                        }
+                        c = RAMP[lv]
+                    }
+                    target.setPixel(i, y, c)
+                    L += dL
+                }
+                ybuf[i] = sy
+                edgeZ[i] = z
+            }
+            prevV[i] = v
+            lx += stepX
+            ly += stepY
+        }
         for (let t = 0; t < thingX.length; t++) {
             if (thingDepth[t] > z - dz && thingDepth[t] <= z && thingCol[t] >= 0 && thingCol[t] < 160) {
                 thingOcc[t] = ybuf[thingCol[t]]
@@ -3923,7 +4099,7 @@ function drawParticles (target: Image) {
 function zoneColor (angle: number): number {
     let a = Math.abs(angle)
     if (a < SAFE_TILT) {
-        return 12
+        return 1
     } else if (a < DANGER_TILT) {
         return 13
     }
@@ -4073,6 +4249,13 @@ function startGame () {
     } else {
         setDayPalette()
     }
+    // شاشة تحميل عشان ما تطلع سودا | a loading screen so it is never just black
+    let loading = image.create(160, 120)
+    loading.fill(15)
+    loading.printCenter("TATEES", 44, 13, image.font8)
+    loading.printCenter("Loading...", 62, 1, image.font8)
+    scene.setBackgroundImage(loading)
+    pause(50)
     sizesFlag = makeSizes(imgFlag)
     sizesTent = makeSizes(imgTent)
     sizesFire1 = makeSizes(imgFire1)
@@ -4107,7 +4290,11 @@ function startGame () {
     camHeading = heading
     let lastTime = game.runtime()
     scene.createRenderable(0, function (target: Image, camera: scene.Camera) {
-        drawTerrain(target)
+        if (RENDER_STYLE == 0) {
+            drawTerrain(target)
+        } else {
+            drawTerrainSmooth(target, RENDER_STYLE == 2)
+        }
         drawThings(target)
         drawParticles(target)
         drawCar(target)
