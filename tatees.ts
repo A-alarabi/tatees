@@ -3199,7 +3199,7 @@ let message = ""
 let messageUntil = 0
 let campX = 0
 let campY = 0
-let SHADOW_LEVEL = 0.25
+let SHADOW_LEVEL = 0.12
 let rolloverHandlers: (() => void)[] = []
 let flagHandlers: (() => void)[] = []
 
@@ -3653,7 +3653,7 @@ function collectThings () {
 let BAYER = [0.125, 0.625, 0.875, 0.375]
 let SHADES = [6, 5, 4, 3]
 // طريقة رسم الرمل | how the sand is drawn
-let RENDER_STYLE = 2
+let RENDER_STYLE = 0
 let FOG_START = 850
 let FOG_AMOUNT = 0.6
 let CONTRAST = 1.5
@@ -4238,10 +4238,10 @@ function checkFlags () {
 //  البداية | Start
 // =====================================================
 function setDayPalette () {
-    image.setPalette(hex`000000ffffff8a1538f0c47ed08a47a864346e3f2a9fd8f04f9dd4f8e2b89c94885e5850e3a961ffd24ae0402f1a1410`)
+    image.setPalette(hex`000000ffffff8a1538ebc88ad9a55cb47e3e6b4a2b9fd8f04f9dd4f2e8cf9c94885e58505e8c31ffd24ae0402f1a1410`)
 }
 function setSunsetPalette () {
-    image.setPalette(hex`000000ffffff8a1538f2b27ad97e4ba8573a6e3530f4946a5b3e7afad3b09c8c885e5060e89a60ffd45ee0402f1a1218`)
+    image.setPalette(hex`000000ffffff8a1538f2b27ad9824ea8573a5a2e2ef4946a5b3e7af6c9a89c8c885e50606e7a3affd45ee0402f1a1218`)
 }
 function startGame () {
     if (timeOfDay == DayTime.Sunset) {
